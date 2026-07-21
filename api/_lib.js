@@ -1,24 +1,23 @@
-const { list, put } = require("@vercel/blob");
+const { get, put } = require("@vercel/blob");
 
 function checkAuth(req) {
   const secret = req.headers["x-app-secret"];
   return Boolean(secret) && secret === process.env.APP_SECRET;
 }
 
-// @vercel/blob doesn't support reading back a fixed pathname directly (blob
-// URLs live under a per-store random subdomain) — list() with an exact
-// prefix match is the documented way to resolve pathname -> current URL.
+// The Blob store is private (auth required for every read), so reads go
+// through get() with the read-write token rather than a plain fetch() of
+// a public URL.
 async function readBlobJson(pathname) {
-  const { blobs } = await list({ prefix: pathname, token: process.env.BLOB_READ_WRITE_TOKEN });
-  const match = blobs.find(b => b.pathname === pathname);
-  if (!match) return null;
-  const r = await fetch(match.url);
-  return r.json();
+  const result = await get(pathname, { access: "private", token: process.env.BLOB_READ_WRITE_TOKEN });
+  if (!result || result.statusCode !== 200) return null;
+  const text = await new Response(result.stream).text();
+  return JSON.parse(text);
 }
 
 async function writeBlobJson(pathname, data) {
   return put(pathname, JSON.stringify(data), {
-    access: "public",
+    access: "private",
     contentType: "application/json",
     addRandomSuffix: false,
     allowOverwrite: true,

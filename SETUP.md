@@ -20,7 +20,7 @@ Skip this entirely and the app still works exactly as before.
 
 1. **Import the repo into Vercel**: [vercel.com/new](https://vercel.com/new) → import `mysteryguy47/discipline` → deploy with default settings (no build command needed, it's static + `/api`).
 
-2. **Create a Blob store**: in the Vercel project → **Storage** tab → **Create Database** → **Blob** → connect it to this project. This automatically adds a `BLOB_READ_WRITE_TOKEN` environment variable for you — nothing to copy manually.
+2. **Create a Blob store**: in the Vercel project → **Storage** tab → **Create Database** → **Blob** → connect it to this project. This automatically adds a `BLOB_READ_WRITE_TOKEN` environment variable for you — nothing to copy manually. The code assumes a **Private** store (every `put`/`get` call passes `access: "private"`) — that's the safer default and what a personal habit tracker should use anyway. Photos are served through `/api/photo` (which streams the private blob through with your sync key as a query param) rather than a raw blob URL, specifically so this works with a private store.
 
 3. **Add the remaining environment variables**: Project → **Settings → Environment Variables**, add:
    - `APP_SECRET` — a random string only you and the app know (shared with you in chat, not committed to git for obvious reasons)
