@@ -1,0 +1,37 @@
+name: Discipline nudges
+
+# Free scheduler for the smart push notifications — sidesteps Vercel Hobby
+# plan's Cron frequency limits by using GitHub Actions as the clock instead.
+# Times are UTC, chosen to land at ~8:00 / 13:00 / 19:00 / 22:30 IST.
+on:
+  schedule:
+    - cron: "30 2 * * *"
+    - cron: "30 7 * * *"
+    - cron: "30 13 * * *"
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Slot to test (morning/midday/evening/night/celebrate)"
+        required: false
+        default: "morning"
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine slot from trigger
+        id: slot
+        run: |
+          case "${{ github.event.schedule }}" in
+            "30 2 * * *") echo "slot=morning" >> "$GITHUB_OUTPUT" ;;
+            "30 7 * * *") echo "slot=midday" >> "$GITHUB_OUTPUT" ;;
+            "30 13 * * *") echo "slot=evening" >> "$GITHUB_OUTPUT" ;;
+            "0 17 * * *") echo "slot=night" >> "$GITHUB_OUTPUT" ;;
+            *) echo "slot=${{ github.event.inputs.slot || 'morning' }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Ping /api/notify
+        run: |
+          curl -sS -X GET "${{ secrets.APP_URL }}/api/notify?slot=${{ steps.slot.outputs.slot }}" \
+            -H "x-app-secret: ${{ secrets.APP_SECRET }}"

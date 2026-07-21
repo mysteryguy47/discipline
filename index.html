@@ -76,9 +76,17 @@
         </div>
       </section>
       <section class="group">
-        <h2>Daily nudges (set up once)</h2>
-        <div class="link-row"><span>Use iOS Reminders / Shortcuts Automations for 4–5x/day alerts</span></div>
-        <p style="color:var(--text-dim);font-size:13px;">See the setup guide that came with this app (NOTIFICATIONS.md) — this app itself can't reliably notify you in the background on iPhone, so the nagging is handled natively by iOS instead.</p>
+        <h2>Cloud sync &amp; notifications</h2>
+        <div class="field">
+          <label>Sync key</label>
+          <input type="password" id="syncKeyInput" placeholder="Paste the key from SETUP.md">
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn secondary small" onclick="saveSyncKeyFromInput()">Save key</button>
+          <button class="btn secondary small" onclick="enablePushNotifications()">Enable notifications</button>
+          <button class="btn secondary small" onclick="restoreFromCloud()">Restore from cloud</button>
+        </div>
+        <p style="color:var(--text-dim);font-size:12px;margin-top:10px;">See SETUP.md for deploying the backend once. Without a key, everything above still works fully offline — you just won't get smart push nudges or a cloud backup.</p>
       </section>
     </div>
   </main>
@@ -92,6 +100,8 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="celebrate-overlay" id="celebrateOverlay" onclick="this.classList.remove('show')"></div>
+<input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none;">
 
 <!-- TASK SHEET -->
 <div class="sheet-backdrop" id="taskSheet" onclick="if(event.target===this) closeTaskSheet()">

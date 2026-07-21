@@ -1,7 +1,10 @@
 /* ---------- storage ---------- */
 const STORE_KEY = "discipline_v1";
+const SYNC_KEY_STORAGE = "discipline_sync_key";
 const MILESTONES = [7, 14, 30, 60, 90, 180, 365];
 const MIN_REWARD_COST = 30;
+// Public by design (Web Push spec) — safe to ship in client code.
+const VAPID_PUBLIC_KEY = "BBy-uvZedB7Vp8rr64lif9daYZ7j2aZhjiCIRkPT5CxEIm12kJzTKZZ1ITXQXU4zornPN_4n4v4k9TKSelYAOLg";
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
 function pad2(n) { return String(n).padStart(2, "0"); }
@@ -29,7 +32,7 @@ function defaultState() {
   const today = todayStr();
   const mk = (name, type, group, extra = {}) => ({
     id: uid(), name, type, group, points: 10,
-    archived: false, createdAt: today,
+    archived: false, createdAt: today, photos: {},
     ...extra
   });
   return {
@@ -39,6 +42,7 @@ function defaultState() {
     dayStreakBest: 0,
     dayStreakEvalDate: today,
     dayStreakMilestonesAwarded: [],
+    lockedDates: [],
     tasks: [
       mk("Wake-up check-in", "checkbox", "Anchors"),
       mk("Meditate 15–20 min", "checkbox", "Anchors"),
@@ -71,12 +75,14 @@ function migrate(s) {
   if (s.dayStreakBest === undefined) s.dayStreakBest = 0;
   if (s.dayStreakEvalDate === undefined) s.dayStreakEvalDate = today;
   if (s.dayStreakMilestonesAwarded === undefined) s.dayStreakMilestonesAwarded = [];
+  if (s.lockedDates === undefined) s.lockedDates = [];
   s.tasks.forEach(t => {
     delete t.streak;
     delete t.milestonesAwarded;
     delete t.lastDoneDate;
     if (t.type === "abstinence" && t.best === undefined) t.best = 0;
     if (t.type === "progressive" && t.daysAtLevel === undefined) t.daysAtLevel = 0;
+    if (t.photos === undefined) t.photos = {};
   });
   return s;
 }
@@ -113,10 +119,10 @@ function wasAbstinenceCleanOnDate(t, dateStr) {
   return !t.slips.some(s => s.date === dateStr);
 }
 
-// A "perfect day" = every currently-active task was completed that day
-// (checkbox/progressive done, abstinence not slipped). Uses the CURRENT task
-// list, so adding/removing tasks changes what's required — including
-// retroactively for dates being re-checked (see caveat in NOTIFICATIONS.md).
+// A "perfect day" = every currently-active task is completed (checkbox/
+// progressive done, abstinence not slipped), checked live against whatever
+// the task list is RIGHT NOW — so adding/removing tasks changes what's
+// required for today.
 function wasDayPerfect(dateStr) {
   const active = state.tasks.filter(t => !t.archived);
   if (active.length === 0) return false;
@@ -125,17 +131,17 @@ function wasDayPerfect(dateStr) {
     : wasTaskDoneOnDate(t, dateStr));
 }
 
-/* ---------- rollover: finalize yesterday's day-streak once per new day ---------- */
+/* ---------- rollover: only handles FAILURE (a day that ended without being locked) ---------- */
+// Success is credited instantly (see tryLockToday) the moment the last task
+// is completed — rollover's only job is to notice a day that closed without
+// ever reaching that point and zero the streak.
 function ensureRollover() {
   const today = todayStr();
   if (state.dayStreakEvalDate !== today) {
     if (state.dayStreakEvalDate) {
       const gap = daysBetween(state.dayStreakEvalDate, today);
-      if (gap === 1 && wasDayPerfect(state.dayStreakEvalDate)) {
-        state.dayStreak += 1;
-        state.dayStreakBest = Math.max(state.dayStreakBest, state.dayStreak);
-        checkDayStreakMilestones();
-      } else {
+      const wasLocked = state.lockedDates.includes(state.dayStreakEvalDate);
+      if (gap !== 1 || !wasLocked) {
         state.dayStreak = 0;
         state.dayStreakMilestonesAwarded = [];
       }
@@ -155,7 +161,6 @@ function checkDayStreakMilestones() {
       state.dayStreakMilestonesAwarded.push(m);
       addPoints(m);
       logHistory(null, "Day streak", "milestone", m, `${m}-day perfect streak`);
-      toast(`🔥 ${m}-day streak! +${m} pts`);
     }
   });
 }
@@ -165,31 +170,55 @@ function logHistory(taskId, taskName, type, points, note) {
   if (state.history.length > 500) state.history.length = 500;
 }
 
+// Fires the instant the last pending task is completed, in whatever order.
+// Locks today's completions (no more undo/late-slip credit) and celebrates.
+function tryLockToday() {
+  const today = todayStr();
+  if (state.lockedDates.includes(today)) return;
+  if (!wasDayPerfect(today)) return;
+  state.lockedDates.push(today);
+  state.dayStreak += 1;
+  state.dayStreakBest = Math.max(state.dayStreakBest, state.dayStreak);
+  logHistory(null, "Day streak", "streak_up", 0, `Day ${state.dayStreak} locked in`);
+  checkDayStreakMilestones();
+  save(state);
+  render();
+  celebrateStreak(state.dayStreak);
+  notifyNow();
+  syncState();
+}
+
 /* ---------- task actions ---------- */
 function toggleCheckbox(id) {
   const t = state.tasks.find(x => x.id === id);
   if (!t) return;
   const today = todayStr();
+  const locked = state.lockedDates.includes(today);
   if (isDoneToday(t)) {
-    // undo
+    if (locked) { toast("Today's streak is locked in — no take-backs."); return; }
     addPoints(-t.points);
     logHistory(t.id, t.name, "undone", -t.points);
     if (t.type === "progressive") t.daysAtLevel = Math.max(0, t.daysAtLevel - 1);
-  } else {
-    const continuing = wasTaskDoneOnDate(t, yesterdayOf(today));
-    addPoints(t.points);
-    logHistory(t.id, t.name, "done", t.points);
-    if (t.type === "progressive") {
-      t.daysAtLevel = continuing ? t.daysAtLevel + 1 : 1;
-      if (t.daysAtLevel >= t.holdDays) {
-        t.currentTarget += t.increment;
-        t.daysAtLevel = 0;
-        toast(`⬆️ ${t.name} target now ${t.currentTarget} ${t.unit}`);
-      }
+    save(state);
+    render();
+    syncState();
+    return;
+  }
+  const continuing = wasTaskDoneOnDate(t, yesterdayOf(today));
+  addPoints(t.points);
+  logHistory(t.id, t.name, "done", t.points);
+  if (t.type === "progressive") {
+    t.daysAtLevel = continuing ? t.daysAtLevel + 1 : 1;
+    if (t.daysAtLevel >= t.holdDays) {
+      t.currentTarget += t.increment;
+      t.daysAtLevel = 0;
+      toast(`⬆️ ${t.name} target now ${t.currentTarget} ${t.unit}`);
     }
   }
   save(state);
   render();
+  tryLockToday();
+  syncState();
 }
 
 function adjustProgressiveTarget(id, delta) {
@@ -211,7 +240,10 @@ function logSlip(id) {
   logHistory(t.id, t.name, "slip", 0);
   save(state);
   render();
-  toast(`Logged. "${t.name}" reset — and today's day-streak is now broken.`);
+  syncState();
+  toast(state.lockedDates.includes(today)
+    ? `Logged. Today's day-streak stays locked in, but the clock restarts on "${t.name}".`
+    : `Logged. "${t.name}" reset — and today's day-streak is now off the table.`);
 }
 
 /* ---------- reward actions ---------- */
@@ -223,6 +255,7 @@ function redeemReward(id) {
   logHistory(null, r.name, "redeem", -r.cost);
   save(state);
   render();
+  syncState();
   toast(`🎉 Redeemed: ${r.name}`);
 }
 
@@ -233,7 +266,7 @@ function upsertTask(data) {
     Object.assign(t, data);
   } else {
     const { id, ...rest } = data; // data.id is null in add-mode; drop it so it can't clobber the generated uid
-    const base = { id: uid(), archived: false, createdAt: todayStr() };
+    const base = { id: uid(), archived: false, createdAt: todayStr(), photos: {} };
     if (rest.type === "progressive") {
       base.currentTarget = rest.startTarget;
       base.daysAtLevel = 0;
@@ -247,17 +280,20 @@ function upsertTask(data) {
   }
   save(state);
   render();
+  syncState();
 }
 function deleteTask(id) {
   state.tasks = state.tasks.filter(t => t.id !== id);
   save(state);
   render();
+  syncState();
 }
 function archiveTask(id, archived) {
   const t = state.tasks.find(x => x.id === id);
   if (t) t.archived = archived;
   save(state);
   render();
+  syncState();
 }
 function upsertReward(data) {
   if (data.cost < MIN_REWARD_COST) {
@@ -273,11 +309,13 @@ function upsertReward(data) {
   }
   save(state);
   render();
+  syncState();
 }
 function deleteReward(id) {
   state.rewards = state.rewards.filter(r => r.id !== id);
   save(state);
   render();
+  syncState();
 }
 
 /* ---------- backup ---------- */
@@ -305,6 +343,187 @@ function importBackup(file) {
   };
   reader.readAsText(file);
 }
+
+/* ---------- cloud sync + push notifications ---------- */
+// Everything below is best-effort: if there's no sync key configured, or the
+// backend isn't deployed yet, these all fail silently and the app keeps
+// working purely local-first exactly as before.
+function getSyncKey() { return localStorage.getItem(SYNC_KEY_STORAGE) || ""; }
+function setSyncKey(k) { localStorage.setItem(SYNC_KEY_STORAGE, k); }
+
+let syncTimer;
+function syncState() {
+  const key = getSyncKey();
+  if (!key) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-app-secret": key },
+      body: JSON.stringify(state),
+    }).catch(() => {});
+  }, 1500);
+}
+
+function notifyNow() {
+  const key = getSyncKey();
+  if (!key) return;
+  fetch("/api/notify?slot=celebrate", { headers: { "x-app-secret": key } }).catch(() => {});
+}
+
+function saveSyncKeyFromInput() {
+  const v = document.getElementById("syncKeyInput").value.trim();
+  if (!v) { toast("Enter a key first."); return; }
+  setSyncKey(v);
+  toast("Sync key saved — syncing now.");
+  syncState();
+}
+
+async function restoreFromCloud() {
+  const key = getSyncKey();
+  if (!key) { toast("Set your sync key first."); return; }
+  if (!confirm("This replaces everything on this phone with the cloud copy. Continue?")) return;
+  try {
+    const res = await fetch("/api/state", { headers: { "x-app-secret": key } });
+    if (!res.ok) throw new Error("failed");
+    const data = await res.json();
+    state = migrate(data);
+    save(state);
+    ensureRollover();
+    render();
+    toast("Restored from cloud.");
+  } catch (e) { toast("Couldn't reach the cloud backup."); }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function enablePushNotifications() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    toast("Push isn't supported in this browser."); return;
+  }
+  const key = getSyncKey();
+  if (!key) { toast("Set your cloud sync key first."); return; }
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") { toast("Notification permission denied."); return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    await fetch("/api/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-app-secret": key },
+      body: JSON.stringify(sub),
+    });
+    toast("Notifications enabled.");
+  } catch (e) {
+    toast("Couldn't enable notifications — is the backend deployed?");
+  }
+}
+
+/* ---------- photo attachments ---------- */
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const maxDim = 1280;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
+          else { width = Math.round(width * maxDim / height); height = maxDim; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.72));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadPhoto(taskId, date, dataUrl) {
+  const key = getSyncKey();
+  if (!key) throw new Error("no sync key configured");
+  const res = await fetch("/api/photo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-app-secret": key },
+    body: JSON.stringify({ taskId, date, image: dataUrl }),
+  });
+  if (!res.ok) throw new Error("upload failed");
+  const data = await res.json();
+  return data.url;
+}
+
+let pendingPhotoTaskId = null;
+function triggerPhotoPicker(taskId) {
+  const t = state.tasks.find(x => x.id === taskId);
+  const today = todayStr();
+  if (t && state.lockedDates.includes(today) && isDoneToday(t)) {
+    toast("This task is locked in for today — can't change its photo.");
+    return;
+  }
+  pendingPhotoTaskId = taskId;
+  document.getElementById("photoInput").click();
+}
+
+async function attachPhoto(file) {
+  const taskId = pendingPhotoTaskId;
+  const t = state.tasks.find(x => x.id === taskId);
+  if (!t || !file) return;
+  const today = todayStr();
+  toast("Uploading photo…");
+  try {
+    const compressed = await compressImage(file);
+    const url = await uploadPhoto(taskId, today, compressed);
+    t.photos[today] = url;
+    save(state);
+    render();
+    syncState();
+    toast("Photo attached.");
+  } catch (e) {
+    toast("Photo upload failed — set up cloud sync in Manage, or check your connection.");
+  }
+}
+
+/* ---------- celebration animation ---------- */
+function celebrateStreak(n) {
+  const overlay = document.getElementById("celebrateOverlay");
+  if (!overlay) return;
+  const emojis = ["🔥", "✨", "🎉"];
+  const particles = Array.from({ length: 16 }, (_, i) => {
+    const angle = (360 / 16) * i;
+    const dist = 70 + Math.random() * 60;
+    const dx = Math.cos(angle * Math.PI / 180) * dist;
+    const dy = Math.sin(angle * Math.PI / 180) * dist;
+    return `<span class="particle" style="--dx:${dx.toFixed(0)}px;--dy:${dy.toFixed(0)}px;animation-delay:${(Math.random() * 0.15).toFixed(2)}s;">${emojis[i % emojis.length]}</span>`;
+  }).join("");
+  overlay.innerHTML = `
+    <div class="celebrate-card">
+      <div class="celebrate-particles">${particles}</div>
+      <div class="celebrate-flame">🔥</div>
+      <div class="celebrate-num">${n}</div>
+      <div class="celebrate-label">Day streak — locked in</div>
+    </div>`;
+  overlay.classList.add("show");
+  clearTimeout(celebrateTimer);
+  celebrateTimer = setTimeout(() => overlay.classList.remove("show"), 2400);
+}
+let celebrateTimer;
 
 /* ---------- UI: toast ---------- */
 let toastTimer;
@@ -346,8 +565,7 @@ function renderToday() {
   const doneCount = actionable.filter(isDoneToday).length;
   const totalCount = actionable.length;
   const today = todayStr();
-  const perfectSoFar = active.length > 0 && active.every(t =>
-    t.type === "abstinence" ? wasAbstinenceCleanOnDate(t, today) : isDoneToday(t));
+  const locked = state.lockedDates.includes(today);
 
   document.getElementById("summary").innerHTML = `
     <div class="card"><div class="num">${doneCount}/${totalCount}</div><div class="label">Today</div></div>
@@ -358,8 +576,8 @@ function renderToday() {
   const groups = {};
   active.forEach(t => { (groups[t.group] = groups[t.group] || []).push(t); });
 
-  const banner = perfectSoFar
-    ? `<div class="perfect-banner">🎉 Everything's done — day-streak continues tomorrow morning.</div>`
+  const banner = locked
+    ? `<div class="perfect-banner">🔒 Today's streak is locked in. Nice.</div>`
     : "";
 
   const html = Object.keys(groups).map(g => `
@@ -370,6 +588,16 @@ function renderToday() {
   `).join("") || `<div class="empty-hint">No tasks yet. Add some in Manage.</div>`;
 
   document.getElementById("todayList").innerHTML = banner + html;
+}
+
+function photoControlHtml(t) {
+  const today = todayStr();
+  const url = t.photos && t.photos[today];
+  const lockedForThis = state.lockedDates.includes(today) && isDoneToday(t);
+  if (url) {
+    return `<img src="${url}" class="photo-thumb" onclick="triggerPhotoPicker('${t.id}')" title="${lockedForThis ? "Locked in" : "Tap to replace"}">`;
+  }
+  return `<button class="photo-btn" onclick="triggerPhotoPicker('${t.id}')" title="Attach photo">📷</button>`;
 }
 
 function taskRowHtml(t) {
@@ -386,6 +614,7 @@ function taskRowHtml(t) {
       </div>`;
   }
   const done = isDoneToday(t);
+  const locked = state.lockedDates.includes(todayStr());
   let stepper = "";
   if (t.type === "progressive" && !done) {
     stepper = `
@@ -396,13 +625,15 @@ function taskRowHtml(t) {
       </div>`;
   }
   const sub = t.type === "progressive" ? `${t.currentTarget} ${t.unit} target` : "";
+  const checkMark = done ? (locked ? "🔒" : "✓") : "";
   return `
     <div class="task-row ${done ? "done" : ""}">
-      <div class="check" onclick="toggleCheckbox('${t.id}')">${done ? "✓" : ""}</div>
+      <div class="check ${done && locked ? "locked" : ""}" onclick="toggleCheckbox('${t.id}')">${checkMark}</div>
       <div class="task-info" onclick="toggleCheckbox('${t.id}')">
         <div class="task-name">${escapeHtml(t.name)}</div>
         ${sub ? `<div class="task-sub">${sub}</div>` : ""}
       </div>
+      ${photoControlHtml(t)}
       ${stepper}
       <div class="mood">${moodEmoji(t)}</div>
     </div>`;
@@ -410,24 +641,28 @@ function taskRowHtml(t) {
 
 function handleSlip(id) {
   const t = state.tasks.find(x => x.id === id);
-  if (confirm(`Log a slip on "${t.name}"? This breaks today's day-streak.`)) logSlip(id);
+  if (confirm(`Log a slip on "${t.name}"?`)) logSlip(id);
 }
 
 function renderProgress() {
   const days = [];
   for (let i = 69; i >= 0; i--) days.push(addDays(todayStr(), -i));
+  const today = todayStr();
   const cells = days.map(d => {
-    const perfect = wasDayPerfect(d);
+    const perfect = d === today ? wasDayPerfect(d) : state.lockedDates.includes(d);
     const bg = perfect ? "var(--accent)" : "var(--bg-elev-2)";
     return `<div class="cell" title="${d}: ${perfect ? "perfect day" : "incomplete"}" style="background:${bg}"></div>`;
   }).join("");
   document.getElementById("heatmap").innerHTML = cells;
 
-  const recent = state.history.slice(0, 40).map(h => `
+  const recent = state.history.slice(0, 40).map(h => {
+    const icon = h.type === "slip" ? "⚠️ Slip – " : h.type === "redeem" ? "🎁 " : h.type === "milestone" ? "🏆 " : h.type === "streak_up" ? "🔒 " : h.points >= 0 ? "✅ " : "↩️ ";
+    return `
     <div class="history-item">
-      <span>${h.type === "slip" ? "⚠️ Slip – " : h.type === "redeem" ? "🎁 " : h.type === "milestone" ? "🏆 " : h.points >= 0 ? "✅ " : "↩️ "}${escapeHtml(h.taskName || "")}${h.note ? " – " + escapeHtml(h.note) : ""}</span>
+      <span>${icon}${escapeHtml(h.taskName || "")}${h.note ? " – " + escapeHtml(h.note) : ""}</span>
       <span class="d">${h.date}${h.points ? ` · ${h.points > 0 ? "+" : ""}${h.points}` : ""}</span>
-    </div>`).join("") || `<div class="empty-hint">Nothing logged yet.</div>`;
+    </div>`;
+  }).join("") || `<div class="empty-hint">Nothing logged yet.</div>`;
   document.getElementById("historyList").innerHTML = recent;
 
   const challengeRows = state.tasks.filter(t => t.type === "abstinence" && !t.archived).map(t => `
@@ -564,4 +799,9 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("importInput").addEventListener("change", e => {
     if (e.target.files[0]) importBackup(e.target.files[0]);
   });
+  document.getElementById("photoInput").addEventListener("change", e => {
+    if (e.target.files[0]) attachPhoto(e.target.files[0]);
+    e.target.value = "";
+  });
+  document.getElementById("syncKeyInput").value = getSyncKey();
 });

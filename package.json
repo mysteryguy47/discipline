@@ -1,0 +1,10 @@
+{
+  "name": "discipline",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Personal discipline PWA — static frontend + small Vercel API for cloud sync, photo storage, and smart push notifications.",
+  "dependencies": {
+    "@vercel/blob": "^2.6.1",
+    "web-push": "^3.6.7"
+  }
+}

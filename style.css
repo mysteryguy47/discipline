@@ -155,6 +155,98 @@ section.group h2 {
   text-align: center;
 }
 
+.check.locked {
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.photo-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.photo-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+}
+
+/* Celebration overlay — fires once when a day locks in */
+.celebrate-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0);
+  transition: opacity .3s ease, background .3s ease;
+}
+.celebrate-overlay.show {
+  opacity: 1;
+  pointer-events: auto;
+  background: rgba(8,8,10,0.6);
+  backdrop-filter: blur(6px);
+}
+.celebrate-card {
+  position: relative;
+  text-align: center;
+  animation: celebrate-pop .5s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes celebrate-pop {
+  0% { transform: scale(.4); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.celebrate-flame {
+  font-size: 64px;
+  filter: drop-shadow(0 0 24px rgba(255,138,61,0.65));
+}
+.celebrate-num {
+  font-size: 56px;
+  font-weight: 800;
+  color: #fff;
+  margin-top: 4px;
+  line-height: 1;
+}
+.celebrate-label {
+  font-size: 13px;
+  color: rgba(255,255,255,0.7);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin-top: 6px;
+}
+.celebrate-particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.particle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  font-size: 20px;
+  transform: translate(-50%, -50%);
+  animation: particle-burst 1s ease-out forwards;
+}
+@keyframes particle-burst {
+  0% { transform: translate(-50%, -50%) scale(.6); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1.15); opacity: 0; }
+}
+
 button {
   font-family: inherit;
   cursor: pointer;
