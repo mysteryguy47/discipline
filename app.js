@@ -371,7 +371,11 @@ async function pushStateToCloud() {
       body: JSON.stringify(state),
     });
     if (res.status === 401) return { ok: false, detail: "sync key doesn't match — check for typos" };
-    if (!res.ok) return { ok: false, detail: `server error (${res.status})` };
+    if (!res.ok) {
+      let serverDetail = "";
+      try { const body = await res.json(); serverDetail = body.detail || body.error || ""; } catch (e) {}
+      return { ok: false, detail: `server error (${res.status})${serverDetail ? ": " + serverDetail : ""}` };
+    }
     return { ok: true, detail: "synced" };
   } catch (e) {
     return { ok: false, detail: "network error — is the backend deployed?" };
@@ -421,14 +425,14 @@ async function restoreFromCloud() {
   if (!confirm("This replaces everything on this phone with the cloud copy. Continue?")) return;
   try {
     const res = await fetch("/api/state", { headers: { "x-app-secret": key } });
-    if (!res.ok) throw new Error("failed");
-    const data = await res.json();
-    state = migrate(data);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || body.error || `server error (${res.status})`);
+    state = migrate(body);
     save(state);
     ensureRollover();
     render();
     toast("Restored from cloud.");
-  } catch (e) { toast("Couldn't reach the cloud backup."); }
+  } catch (e) { toast(`Couldn't reach the cloud backup: ${e.message}`); }
 }
 
 function urlBase64ToUint8Array(base64String) {
@@ -455,14 +459,16 @@ async function enablePushNotifications() {
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
       });
     }
-    await fetch("/api/subscribe", {
+    const res = await fetch("/api/subscribe", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-app-secret": key },
       body: JSON.stringify(sub),
     });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || body.error || `server error (${res.status})`);
     toast("Notifications enabled.");
   } catch (e) {
-    toast("Couldn't enable notifications — is the backend deployed?");
+    toast(`Couldn't enable notifications: ${e.message}`);
   }
 }
 

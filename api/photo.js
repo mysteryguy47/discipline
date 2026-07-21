@@ -17,12 +17,16 @@ module.exports = async (req, res) => {
   const safeDate = String(date).replace(/[^0-9-]/g, "");
   const pathname = `discipline/photos/${safeTaskId}-${safeDate}.${ext}`;
 
-  const blob = await put(pathname, buffer, {
-    access: "public",
-    contentType: `image/${match[1]}`,
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
-  });
-  return res.status(200).json({ url: blob.url });
+  try {
+    const blob = await put(pathname, buffer, {
+      access: "public",
+      contentType: `image/${match[1]}`,
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    });
+    return res.status(200).json({ url: blob.url });
+  } catch (e) {
+    return res.status(500).json({ error: "photo handler crashed", detail: String((e && e.message) || e) });
+  }
 };

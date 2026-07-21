@@ -9,6 +9,10 @@ module.exports = async (req, res) => {
   const sub = req.body;
   if (!sub || !sub.endpoint) return res.status(400).json({ error: "invalid push subscription" });
 
-  await writeBlobJson(SUB_PATH, sub);
-  return res.status(200).json({ ok: true });
+  try {
+    await writeBlobJson(SUB_PATH, sub);
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: "subscribe handler crashed", detail: String((e && e.message) || e) });
+  }
 };

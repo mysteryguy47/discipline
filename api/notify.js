@@ -1,12 +1,6 @@
 const webpush = require("web-push");
 const { checkAuth, readBlobJson } = require("./_lib");
 
-webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT || "mailto:you@example.com",
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
-
 const STATE_PATH = "discipline/state.json";
 const SUB_PATH = "discipline/subscription.json";
 
@@ -57,26 +51,36 @@ function buildMessage(slot, state, today) {
 module.exports = async (req, res) => {
   if (!checkAuth(req)) return res.status(401).json({ error: "unauthorized" });
 
-  const slot = (req.query && req.query.slot) || "default";
-
-  const state = await readBlobJson(STATE_PATH);
-  if (!state) return res.status(200).json({ skipped: "no state synced from the phone yet" });
-
-  const sub = await readBlobJson(SUB_PATH);
-  if (!sub) return res.status(200).json({ skipped: "no push subscription registered yet" });
-
-  const today = istTodayStr();
-  if (slot !== "celebrate" && (state.lockedDates || []).includes(today)) {
-    return res.status(200).json({ skipped: "today is already locked in" });
+  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    return res.status(500).json({ error: "VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY not set in this deployment's env vars" });
   }
 
-  const message = buildMessage(slot, state, today);
-  if (!message) return res.status(200).json({ skipped: "nothing remaining to nag about" });
-
   try {
+    webpush.setVapidDetails(
+      process.env.VAPID_SUBJECT || "mailto:you@example.com",
+      process.env.VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    );
+
+    const slot = (req.query && req.query.slot) || "default";
+
+    const state = await readBlobJson(STATE_PATH);
+    if (!state) return res.status(200).json({ skipped: "no state synced from the phone yet" });
+
+    const sub = await readBlobJson(SUB_PATH);
+    if (!sub) return res.status(200).json({ skipped: "no push subscription registered yet" });
+
+    const today = istTodayStr();
+    if (slot !== "celebrate" && (state.lockedDates || []).includes(today)) {
+      return res.status(200).json({ skipped: "today is already locked in" });
+    }
+
+    const message = buildMessage(slot, state, today);
+    if (!message) return res.status(200).json({ skipped: "nothing remaining to nag about" });
+
     await webpush.sendNotification(sub, JSON.stringify(message));
     return res.status(200).json({ sent: true, message });
   } catch (e) {
-    return res.status(500).json({ error: "push send failed", detail: String(e && e.message || e) });
+    return res.status(500).json({ error: "notify handler crashed", detail: String((e && e.message) || e) });
   }
 };
