@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Discipline</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Discipline">
+<meta name="theme-color" content="#0e0f12">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <h1>Discipline</h1>
+    <div class="date" id="todayDate"></div>
+  </header>
+
+  <main>
+    <!-- TODAY -->
+    <div class="view active" id="view-today">
+      <div class="summary" id="summary"></div>
+      <div id="todayList"></div>
+    </div>
+
+    <!-- PROGRESS -->
+    <div class="view" id="view-progress">
+      <section class="group">
+        <h2>Last 10 weeks</h2>
+        <div class="heatmap" id="heatmap"></div>
+      </section>
+      <section class="group">
+        <h2>Streaks</h2>
+        <div id="streakSummary"></div>
+      </section>
+      <section class="group">
+        <h2>Recent activity</h2>
+        <div id="historyList"></div>
+      </section>
+    </div>
+
+    <!-- REWARDS -->
+    <div class="view" id="view-rewards">
+      <div class="summary">
+        <div class="card" style="flex:none;width:100%;">
+          <div class="num" id="rewardBalance">0</div>
+          <div class="label">Points available</div>
+        </div>
+      </div>
+      <section class="group">
+        <h2>Your rewards menu</h2>
+        <div id="rewardsList"></div>
+        <button class="btn secondary block" style="margin-top:10px;" onclick="openRewardSheet()">+ Add reward</button>
+      </section>
+    </div>
+
+    <!-- MANAGE -->
+    <div class="view" id="view-manage">
+      <section class="group">
+        <h2>All tasks</h2>
+        <div id="manageList"></div>
+        <button class="btn secondary block" style="margin-top:10px;" onclick="openTaskSheet()">+ Add task</button>
+      </section>
+      <section class="group">
+        <h2>Backup</h2>
+        <p style="color:var(--text-dim);font-size:13px;">Everything lives only on this phone. Export a backup occasionally so a browser data wipe can't erase your streaks.</p>
+        <div style="display:flex;gap:10px;">
+          <button class="btn secondary" id="exportBtn">Export backup</button>
+          <label class="btn secondary" style="cursor:pointer;">
+            Import backup
+            <input type="file" id="importInput" accept="application/json" style="display:none;">
+          </label>
+        </div>
+      </section>
+      <section class="group">
+        <h2>Daily nudges (set up once)</h2>
+        <div class="link-row"><span>Use iOS Reminders / Shortcuts Automations for 4–5x/day alerts</span></div>
+        <p style="color:var(--text-dim);font-size:13px;">See the setup guide that came with this app (NOTIFICATIONS.md) — this app itself can't reliably notify you in the background on iPhone, so the nagging is handled natively by iOS instead.</p>
+      </section>
+    </div>
+  </main>
+
+  <nav class="tabs">
+    <button data-view="today" class="active" onclick="switchView('today')"><span class="icon">✅</span>Today</button>
+    <button data-view="progress" onclick="switchView('progress')"><span class="icon">📈</span>Progress</button>
+    <button data-view="rewards" onclick="switchView('rewards')"><span class="icon">🎁</span>Rewards</button>
+    <button data-view="manage" onclick="switchView('manage')"><span class="icon">⚙️</span>Manage</button>
+  </nav>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- TASK SHEET -->
+<div class="sheet-backdrop" id="taskSheet" onclick="if(event.target===this) closeTaskSheet()">
+  <div class="sheet">
+    <h3 id="taskSheetTitle">Add task</h3>
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="taskName" placeholder="e.g. Morning walk">
+    </div>
+    <div class="field">
+      <label>Type</label>
+      <div class="chip-group" id="typeChips">
+        <div class="chip" data-type="checkbox" onclick="setTaskType('checkbox')">Checkbox</div>
+        <div class="chip" data-type="progressive" onclick="setTaskType('progressive')">Progressive</div>
+        <div class="chip" data-type="abstinence" onclick="setTaskType('abstinence')">Abstinence</div>
+      </div>
+    </div>
+    <div class="field row-inline">
+      <div>
+        <label>Group</label>
+        <input type="text" id="taskGroup" placeholder="Anchors">
+      </div>
+      <div>
+        <label>Points</label>
+        <input type="number" id="taskPoints" value="10">
+      </div>
+    </div>
+    <div id="progressiveFields" style="display:none;">
+      <div class="field row-inline">
+        <div><label>Start at</label><input type="number" id="taskStart" value="5"></div>
+        <div><label>Unit</label><input type="text" id="taskUnit" value="reps"></div>
+      </div>
+      <div class="field row-inline">
+        <div><label>Increase by</label><input type="number" id="taskIncrement" value="1"></div>
+        <div><label>After (days at level)</label><input type="number" id="taskHold" value="2"></div>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn danger" id="deleteTaskBtn" onclick="deleteTaskFromSheet()" style="display:none;">Delete</button>
+      <button class="btn secondary" onclick="closeTaskSheet()">Cancel</button>
+      <button class="btn" onclick="saveTaskFromSheet()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- REWARD SHEET -->
+<div class="sheet-backdrop" id="rewardSheet" onclick="if(event.target===this) closeRewardSheet()">
+  <div class="sheet">
+    <h3 id="rewardSheetTitle">Add reward</h3>
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="rewardName" placeholder="e.g. Order favorite food">
+    </div>
+    <div class="field">
+      <label>Cost (points, min 30)</label>
+      <input type="number" id="rewardCost" value="50" min="30">
+    </div>
+    <div class="sheet-actions">
+      <button class="btn danger" id="deleteRewardBtn" onclick="deleteRewardFromSheet()" style="display:none;">Delete</button>
+      <button class="btn secondary" onclick="closeRewardSheet()">Cancel</button>
+      <button class="btn" onclick="saveRewardFromSheet()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
