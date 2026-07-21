@@ -345,23 +345,47 @@ function importBackup(file) {
 }
 
 /* ---------- cloud sync + push notifications ---------- */
-// Everything below is best-effort: if there's no sync key configured, or the
-// backend isn't deployed yet, these all fail silently and the app keeps
-// working purely local-first exactly as before.
+// Background syncs (syncState, called after every action) stay silent on
+// failure so routine use never gets interrupted by toasts — but every
+// attempt's outcome is persisted so the Manage tab can show what's actually
+// going on, instead of a wrong key or dead deployment failing invisibly.
+const LAST_SYNC_KEY = "discipline_last_sync";
 function getSyncKey() { return localStorage.getItem(SYNC_KEY_STORAGE) || ""; }
 function setSyncKey(k) { localStorage.setItem(SYNC_KEY_STORAGE, k); }
+function getLastSync() {
+  try { return JSON.parse(localStorage.getItem(LAST_SYNC_KEY) || "null"); }
+  catch (e) { return null; }
+}
+function setLastSync(ok, detail) {
+  localStorage.setItem(LAST_SYNC_KEY, JSON.stringify({ ok, detail, at: new Date().toISOString() }));
+  renderSyncStatus();
+}
+
+async function pushStateToCloud() {
+  const key = getSyncKey();
+  if (!key) return { ok: false, detail: "no sync key set" };
+  try {
+    const res = await fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-app-secret": key },
+      body: JSON.stringify(state),
+    });
+    if (res.status === 401) return { ok: false, detail: "sync key doesn't match — check for typos" };
+    if (!res.ok) return { ok: false, detail: `server error (${res.status})` };
+    return { ok: true, detail: "synced" };
+  } catch (e) {
+    return { ok: false, detail: "network error — is the backend deployed?" };
+  }
+}
 
 let syncTimer;
 function syncState() {
   const key = getSyncKey();
   if (!key) return;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => {
-    fetch("/api/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-app-secret": key },
-      body: JSON.stringify(state),
-    }).catch(() => {});
+  syncTimer = setTimeout(async () => {
+    const result = await pushStateToCloud();
+    setLastSync(result.ok, result.detail);
   }, 1500);
 }
 
@@ -371,12 +395,24 @@ function notifyNow() {
   fetch("/api/notify?slot=celebrate", { headers: { "x-app-secret": key } }).catch(() => {});
 }
 
-function saveSyncKeyFromInput() {
+async function saveSyncKeyFromInput() {
   const v = document.getElementById("syncKeyInput").value.trim();
   if (!v) { toast("Enter a key first."); return; }
   setSyncKey(v);
-  toast("Sync key saved — syncing now.");
-  syncState();
+  toast("Checking connection…");
+  const result = await pushStateToCloud();
+  setLastSync(result.ok, result.detail);
+  toast(result.ok ? "✅ Synced to cloud." : `❌ Sync failed: ${result.detail}`);
+}
+
+function renderSyncStatus() {
+  const el = document.getElementById("syncStatus");
+  if (!el) return;
+  if (!getSyncKey()) { el.textContent = "Not connected — paste your sync key above and tap Save key."; return; }
+  const last = getLastSync();
+  if (!last) { el.textContent = "Key saved — not synced yet. Tap Save key to test the connection."; return; }
+  const when = new Date(last.at).toLocaleTimeString();
+  el.textContent = last.ok ? `✅ Last synced ${when}` : `❌ Last sync failed at ${when}: ${last.detail}`;
 }
 
 async function restoreFromCloud() {
@@ -544,6 +580,7 @@ function render() {
   renderProgress();
   renderRewards();
   renderManage();
+  renderSyncStatus();
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + currentView));
   document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.view === currentView));
 }
